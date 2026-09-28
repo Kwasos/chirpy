@@ -9,9 +9,11 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"chirpy/internal/database"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -19,6 +21,22 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
+	platform       string
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -42,41 +60,13 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
-	cfg.fileserverHits.Store(0)
-	w.WriteHeader(http.StatusOK)
-}
-
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
-	dat, err := json.Marshal(payload)
-	if err != nil {
-		w.WriteHeader(500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_, err = w.Write(dat)
-	if err != nil {
-		log.Printf("Error writing response: %s", err)
-		return
-	}
-}
-
-func respondWithError(w http.ResponseWriter, code int, msg string) {
-	type errorResponse struct {
-		Error string `json:"error"`
-	}
-	respondWithJSON(w, code, errorResponse{
-		Error: msg,
-	})
-}
-
-func (cfg *apiConfig) handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
-	type chirpBody struct {
-		Body string `json:"body"`
+func (cfg *apiConfig) handlerChirpsCreate(w http.ResponseWriter, r *http.Request) {
+	type chirpData struct {
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
 	}
 	decoder := json.NewDecoder(r.Body)
-	chirp := chirpBody{}
+	chirp := chirpData{}
 	err := decoder.Decode(&chirp)
 	if err != nil {
 		respondWithError(w, 500, "Something went wrong")
@@ -97,12 +87,22 @@ func (cfg *apiConfig) handlerValidateChirp(w http.ResponseWriter, r *http.Reques
 			chirpSplit[i] = cleanSplit[i]
 		}
 	}
-	type cleanChirp struct {
-		CleanedBody string `json:"cleaned_body"`
+	dbChirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body:   strings.Join(chirpSplit, " "),
+		UserID: chirp.UserID,
+	})
+	if err != nil {
+		respondWithError(w, 500, "Couldn't create chirp")
+		return
 	}
-	cleanedChirp := cleanChirp{}
-	cleanedChirp.CleanedBody = strings.Join(chirpSplit, " ")
-	respondWithJSON(w, 200, cleanedChirp)
+
+	respondWithJSON(w, 201, Chirp{
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+		UserID:    dbChirp.UserID,
+	})
 }
 
 func main() {
@@ -111,13 +111,15 @@ func main() {
 		log.Printf("could not load env: %v", err)
 	}
 	dbURL := os.Getenv("DB_URL")
+	platform := os.Getenv("PLATFORM")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Printf("could not open postres: %v", err)
 	}
 	dbQueries := database.New(db)
 	apiCfg := apiConfig{
-		db: dbQueries,
+		db:       dbQueries,
+		platform: platform,
 	}
 
 	port := "8080"
@@ -125,7 +127,8 @@ func main() {
 	filepathRoot := http.Dir(".")
 	handler := apiCfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(filepathRoot)))
 	mux.Handle("/app/", handler)
-	mux.HandleFunc("POST /api/validate_chirp", apiCfg.handlerValidateChirp)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handlerChirpsCreate)
+	mux.HandleFunc("POST /api/users", apiCfg.handlerUsersCreate)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
