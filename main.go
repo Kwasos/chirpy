@@ -105,6 +105,47 @@ func (cfg *apiConfig) handlerChirpsCreate(w http.ResponseWriter, r *http.Request
 	})
 }
 
+func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
+	dbChirps, err := cfg.db.GetChirps(r.Context())
+	if err != nil {
+		respondWithError(w, 500, "Couldn't get chirps")
+		return
+	}
+	chirps := []Chirp{}
+	for _, dbChirp := range dbChirps {
+		chirps = append(chirps, Chirp{
+			ID:        dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			UserID:    dbChirp.UserID,
+			Body:      dbChirp.Body,
+		})
+	}
+	respondWithJSON(w, 200, chirps)
+}
+
+func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, r *http.Request) {
+	chirpIDString := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDString)
+	if err != nil {
+		respondWithError(w, 404, "Couldn't get chirp ID")
+		return
+	}
+	dbChirp, err := cfg.db.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, 404, "Couldn't get chirp")
+		return
+	}
+	chirp := Chirp{
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		UserID:    dbChirp.UserID,
+		Body:      dbChirp.Body,
+	}
+	respondWithJSON(w, 200, chirp)
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -127,6 +168,8 @@ func main() {
 	filepathRoot := http.Dir(".")
 	handler := apiCfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(filepathRoot)))
 	mux.Handle("/app/", handler)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
+	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerChirpsCreate)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerUsersCreate)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
