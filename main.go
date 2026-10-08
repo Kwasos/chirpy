@@ -25,6 +25,7 @@ type apiConfig struct {
 	db             *database.Queries
 	platform       string
 	jwtSecret      string
+	polkaKey       string
 }
 
 type User struct {
@@ -318,13 +319,22 @@ func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) handlerRedUpgrade(w http.ResponseWriter, r *http.Request) {
+	APIkey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if cfg.polkaKey != APIkey {
+		respondWithError(w, http.StatusUnauthorized, "invalid key")
+		return
+	}
 	var params struct {
 		Event string `json:"event"`
 		Data  struct {
 			UserID string `json:"user_id"`
 		} `json:"data"`
 	}
-	err := json.NewDecoder(r.Body).Decode(&params)
+	err = json.NewDecoder(r.Body).Decode(&params)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, err.Error())
 		return
@@ -357,6 +367,7 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
 	jwtSecretString := os.Getenv("JWT_SECRET")
+	polkaKey := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Printf("could not open postres: %v", err)
@@ -366,6 +377,7 @@ func main() {
 		db:        dbQueries,
 		platform:  platform,
 		jwtSecret: jwtSecretString,
+		polkaKey:  polkaKey,
 	}
 
 	port := "8080"
