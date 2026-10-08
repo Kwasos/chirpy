@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -122,10 +123,28 @@ func (cfg *apiConfig) handlerChirpsCreate(w http.ResponseWriter, r *http.Request
 }
 
 func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
-	dbChirps, err := cfg.db.GetChirps(r.Context())
-	if err != nil {
-		respondWithError(w, 500, "Couldn't get chirps")
-		return
+	// Check for optional ?author_id=# in URL
+	authorIDStr := r.URL.Query().Get("author_id")
+	var dbChirps []database.Chirp
+	var err error
+	var authorID uuid.UUID
+	if authorIDStr != "" {
+		authorID, err = uuid.Parse(authorIDStr)
+		if err != nil {
+			respondWithError(w, http.StatusNotFound, "Couldn't get author ID")
+			return
+		}
+		dbChirps, err = cfg.db.GetChirpsByUserID(r.Context(), authorID)
+		if err != nil {
+			respondWithError(w, 500, "Couldn't get chirps")
+			return
+		}
+	} else {
+		dbChirps, err = cfg.db.GetChirps(r.Context())
+		if err != nil {
+			respondWithError(w, 500, "Couldn't get chirps")
+			return
+		}
 	}
 	chirps := []Chirp{}
 	for _, dbChirp := range dbChirps {
@@ -135,6 +154,13 @@ func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt: dbChirp.UpdatedAt,
 			UserID:    dbChirp.UserID,
 			Body:      dbChirp.Body,
+		})
+	}
+	// Check for optional ?sort=[asc/desc] in URL
+	sortOrder := r.URL.Query().Get("sort")
+	if sortOrder == "desc" {
+		sort.Slice(chirps, func(i int, j int) bool {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
 		})
 	}
 	respondWithJSON(w, 200, chirps)
